@@ -1,0 +1,9 @@
+[package]
+name = "memmap"
+version = "0.1.0"
+authors = ["Alexandr Yusuk <aleksandr.yusuk@apriorit.com>"]
+edition = "2018"
+
+[dependencies]
+winapi = { version = "0.3.9", features = ["std", "memoryapi", "minwindef", "impl-default", "sysinfoapi", "handleapi", "tlhelp32", "processthreadsapi", "errhandlingapi", "winbase" ] }
+lazy_static = "1.4"
