@@ -4,6 +4,11 @@ version = "0.1.0"
 authors = ["Alexandr Yusuk <aleksandr.yusuk@apriorit.com>"]
 edition = "2018"
 
+[lib]
+name = "memmap"
+path = "src/lib.rs"
+
 [dependencies]
 winapi = { version = "0.3.9", features = ["std", "memoryapi", "minwindef", "impl-default", "sysinfoapi", "handleapi", "tlhelp32", "processthreadsapi", "errhandlingapi", "winbase" ] }
+widestring = { version = "0.4.3", default-features = false, features = ["alloc"] }
 lazy_static = "1.4"
