@@ -1,37 +1,28 @@
 use std::{
-    ffi::c_void,
     fmt::{self, Formatter},
-    mem::{size_of, size_of_val},
+    mem::size_of_val,
     ptr,
 };
 
-use winapi::{
-    shared::minwindef::{DWORD, PBYTE},
-    um::{
-        memoryapi::VirtualQueryEx,
-        winnt::{
-            RtlMoveMemory, HANDLE, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_FREE, MEM_PRIVATE,
-            MEM_RESERVE, PAGE_GUARD, PVOID,
-        },
+use winapi::um::{
+    memoryapi::VirtualQueryEx,
+    sysinfoapi::{GetSystemInfo, SYSTEM_INFO},
+    winnt::{
+        HANDLE, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_FREE, MEM_RESERVE, PAGE_GUARD, PVOID,
     },
 };
 
 use crate::{
-    enums::{MemState, MemoryPageProtection},
+    enums::{MemState, MemoryPageProtection, PagesType},
     error::{MemMapResult, WinAPIError},
 };
-use winapi::shared::minwindef::LPCVOID;
-use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
 
 #[derive(Debug)]
 pub struct VMQuery {
     rng_base_address: PVOID,
-    rng_protection: MemoryPageProtection,
     rng_size: usize,
-    rng_mem_state: MemState,
-    rng_blocks_count: u32,
-    rng_guard_blocks_count: u32,
-    rng_is_stack: bool,
+    rng_blocks_count: usize,
+    rng_guard_blocks_count: usize,
     memory_blocks: Vec<MemoryBlock>,
 }
 
@@ -43,57 +34,38 @@ impl VMQuery {
         unsafe {
             GetSystemInfo(&mut system_info);
         }
-        let address = system_info.lpMinimumApplicationAddress;
-        let vmqeuery_result =
-            unsafe { VirtualQueryEx(process, address, &mut mbi, size_of_val(&mbi)) };
 
-        if vmqeuery_result == 0 {
-            return Err(WinAPIError::new());
+        let mut address = system_info.lpMinimumApplicationAddress;
+
+        let mut memory_blocks = Vec::new();
+        while address <= system_info.lpMaximumApplicationAddress {
+            let vmqeuery_result =
+                unsafe { VirtualQueryEx(process, address, &mut mbi, size_of_val(&mbi)) };
+
+            if vmqeuery_result == 0 {
+                return Err(WinAPIError::new());
+            }
+
+            memory_blocks.push(MemoryBlock::new(&mbi));
+
+            address = unsafe { address.add(mbi.RegionSize) };
         }
 
-        let memory_blocks = vec![MemoryBlock::new(&mbi)];
-
-        let (
-            rng_base_address,
-            rng_protection,
-            rng_size,
-            rng_storage,
-            rng_blocks,
-            rng_guard_blocks,
-            rng_is_stack,
-        ) = match mbi.State {
-            MEM_FREE => (
-                mbi.BaseAddress,
-                MemoryPageProtection::from(mbi.AllocationProtect),
-                mbi.RegionSize,
-                MemState::MemFree,
-                0,
-                0,
-                false,
-            ),
-            MEM_RESERVE | MEM_COMMIT => {
-                let vmquery_help = VmQueryHelp::new(process, address)?;
-                (
-                    mbi.AllocationBase,
-                    MemoryPageProtection::from(mbi.AllocationProtect),
-                    vmquery_help.rng_size,
-                    vmquery_help.mem_state,
-                    vmquery_help.rng_blocks,
-                    vmquery_help.rng_guard_blocks,
-                    vmquery_help.rng_is_stack,
-                )
-            }
-            _ => unreachable!("No others mem states exist"),
-        };
+        let rng_base_address = memory_blocks
+            .first()
+            .map(|block| block.block_base_address)
+            .unwrap_or(ptr::null_mut());
+        let rng_size = memory_blocks.iter().map(|block| block.block_size).sum();
+        let rng_guard_blocks_count = memory_blocks
+            .iter()
+            .filter(|block| block.block_protection == MemoryPageProtection::Guard)
+            .count();
 
         Ok(Self {
             rng_base_address,
-            rng_protection,
             rng_size,
-            rng_mem_state: rng_storage,
-            rng_blocks_count: rng_blocks,
-            rng_guard_blocks_count: rng_guard_blocks,
-            rng_is_stack,
+            rng_blocks_count: memory_blocks.len(),
+            rng_guard_blocks_count,
             memory_blocks,
         })
     }
@@ -103,103 +75,13 @@ impl fmt::Display for VMQuery {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "rng_base_address: {:p}\nrng_protection: {:?}\nrng_size: {} bytes\nrng_mem_state: {:?}\nrng_blocks: {}\nrng_guard_blocks: {}\nrng_is_stack: {}\nmemory_blocs: {:?}",
+            "rng_base_address: {:p}\nrng_size: {} bytes\nrng_blocks_count: {}\nrng_guard_blocks_count: {}\nmemory_blocs: {:#?}",
             self.rng_base_address,
-            self.rng_protection,
             self.rng_size,
-            self.rng_mem_state,
             self.rng_blocks_count,
             self.rng_guard_blocks_count,
-            self.rng_is_stack,
             self.memory_blocks
         )
-    }
-}
-
-struct VmQueryHelp {
-    rng_size: usize,
-    mem_state: MemState,
-    rng_blocks: u32,
-    rng_guard_blocks: u32,
-    rng_is_stack: bool,
-}
-
-impl VmQueryHelp {
-    fn new(process: HANDLE, address: LPCVOID) -> MemMapResult<Self> {
-        let mut mbi = MEMORY_BASIC_INFORMATION::default();
-
-        let vmqueury_result: usize =
-            unsafe { VirtualQueryEx(process, address, &mut mbi, size_of_val(&mbi)) };
-
-        if vmqueury_result != size_of_val(&mbi) {
-            return Err(WinAPIError::new());
-        }
-
-        let range_base_address: PVOID = mbi.AllocationBase;
-        let mut address_block: PVOID = range_base_address;
-
-        let mut rng_storage: u32 = mbi.Type;
-
-        // let mut protected_block = [0u32; 4];
-        let mut rng_blocks = 0;
-        let mut rng_guard_blocks = 0;
-        let mut rng_size = 0;
-
-        loop {
-            let vmqueury_result: usize =
-                unsafe { VirtualQueryEx(process, address_block, &mut mbi, size_of_val(&mbi)) };
-
-            if vmqueury_result != size_of_val(&mbi) || mbi.AllocationBase != range_base_address {
-                break;
-            }
-
-            // TODO: Delete this shit(refactor at least)
-            /* if rng_blocks < 4 {
-                protected_block[rng_blocks] = if mbi.State == MEM_RESERVE {
-                    0
-                } else {
-                    mbi.Protect
-                };
-            } else {
-                unsafe {
-                    RtlMoveMemory(
-                        protected_block[0] as *mut c_void,
-                        protected_block[1] as *const c_void,
-                        size_of_val(&mbi) - size_of::<DWORD>(),
-                    );
-                }
-
-                protected_block[3] = if mbi.State == MEM_RESERVE {
-                    0
-                } else {
-                    mbi.Protect
-                }
-            }
-            */
-
-            rng_blocks += 1;
-            rng_size += mbi.RegionSize;
-
-            if mbi.Protect & PAGE_GUARD == PAGE_GUARD {
-                rng_guard_blocks += 1;
-            }
-
-            if rng_storage == MEM_PRIVATE {
-                rng_storage = mbi.Type;
-            }
-
-            address_block = unsafe { (address_block as PBYTE).add(mbi.RegionSize) } as PVOID;
-        }
-
-        let rng_is_stack = rng_guard_blocks > 0;
-
-        Ok(Self {
-            rng_size,
-            mem_state: MemState::from(rng_storage),
-            rng_blocks: rng_blocks as u32,
-            rng_guard_blocks,
-            rng_is_stack,
-        })
     }
 }
 
@@ -209,45 +91,49 @@ struct MemoryBlock {
     block_protection: MemoryPageProtection,
     block_size: usize,
     block_storage: MemState,
+    page_type: PagesType,
+    is_stack: bool,
 }
 
 impl MemoryBlock {
     fn new(mbi: &MEMORY_BASIC_INFORMATION) -> Self {
-        let (block_base_address, block_size, block_protection, block_storage) = match mbi.State {
+        let (block_protection, block_storage, page_type, is_stack) = match mbi.State {
             MEM_FREE => (
-                ptr::null_mut(),
-                0,
                 MemoryPageProtection::CallerDoesNotHaveAccess,
                 MemState::MemFree,
+                PagesType::Undefined,
+                false,
             ),
             MEM_RESERVE => (
-                mbi.BaseAddress,
-                mbi.RegionSize,
                 MemoryPageProtection::from(mbi.AllocationProtect),
                 MemState::MemReserve,
+                PagesType::from(mbi.Type),
+                false,
             ),
             MEM_COMMIT => (
-                mbi.BaseAddress,
-                mbi.RegionSize,
-                MemoryPageProtection::from(mbi.Protect),
-                MemState::from(mbi.Type),
+                MemoryPageProtection::from(mbi.AllocationProtect),
+                MemState::MemCommit,
+                PagesType::from(mbi.Type),
+                mbi.Protect & PAGE_GUARD == PAGE_GUARD,
             ),
             _ => unreachable!("No others mem states exist"),
         };
 
         Self {
-            block_base_address,
+            block_base_address: mbi.BaseAddress,
             block_protection,
-            block_size,
+            block_size: mbi.RegionSize,
             block_storage,
+            is_stack,
+            page_type,
         }
     }
 }
 
 impl fmt::Display for MemoryBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "block_base_address: {:p}\n,block_size: {} bytes, block_protection: {:?}, block_storage: {:?}",
-               self.block_base_address, self.block_size, self.block_protection, self.block_storage
+        write!(f, "block_base_address: {:p}\n,block_size: {} bytes, block_protection: {:?}, block_storage: {:?}, is_stack: {}, page type: {:?}",
+               self.block_base_address, self.block_size, self.block_protection, self.block_storage, self.is_stack, self.page_type
         )
     }
 }

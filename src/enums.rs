@@ -1,9 +1,9 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MemState {
     MemCommit,
     MemFree,
     MemReserve,
-    PagesType(PagesType),
+    Undefined,
 }
 
 impl From<u32> for MemState {
@@ -12,16 +12,17 @@ impl From<u32> for MemState {
             0x1000 => MemState::MemCommit,
             0x2000 => MemState::MemReserve,
             0x10000 => MemState::MemFree,
-            _ => MemState::PagesType(PagesType::from(state)),
+            _ => MemState::Undefined,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PagesType {
     MemImage,
     MemMapped,
     MemPrivate,
+    Undefined,
 }
 
 impl From<u32> for PagesType {
@@ -30,13 +31,14 @@ impl From<u32> for PagesType {
             0x20000 => PagesType::MemPrivate,
             0x40000 => PagesType::MemMapped,
             0x1000000 => PagesType::MemImage,
-            _ => unreachable!("No others types of pages exist"),
+            _ => PagesType::Undefined,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MemoryPageProtection {
+    Undefined,
     CallerDoesNotHaveAccess,
     NoAccess,
     ReadOnly,
@@ -66,7 +68,7 @@ impl From<u32> for MemoryPageProtection {
             0x40 => MemoryPageProtection::ExecuteReadWrite,
             0x80 => MemoryPageProtection::ExecuteWriteCopy,
             0x40000000 => MemoryPageProtection::TargetsNoUpdateORInvalid,
-            _ => unreachable!("No others memory page protections exist"),
+            _ => MemoryPageProtection::Undefined,
         }
     }
 }
