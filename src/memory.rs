@@ -6,7 +6,7 @@ use std::{
 };
 
 use winapi::{
-    shared::minwindef::{DWORD, LPCVOID, PBYTE},
+    shared::minwindef::{DWORD, PBYTE},
     um::{
         memoryapi::VirtualQueryEx,
         winnt::{
@@ -20,6 +20,8 @@ use crate::{
     enums::{MemState, MemoryPageProtection},
     error::{MemMapResult, WinAPIError},
 };
+use winapi::shared::minwindef::LPCVOID;
+use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
 
 #[derive(Debug)]
 pub struct VMQuery {
@@ -34,8 +36,14 @@ pub struct VMQuery {
 }
 
 impl VMQuery {
-    pub fn new(process: HANDLE, address: LPCVOID) -> MemMapResult<Self> {
+    pub fn new(process: HANDLE) -> MemMapResult<Self> {
         let mut mbi = MEMORY_BASIC_INFORMATION::default();
+
+        let mut system_info = SYSTEM_INFO::default();
+        unsafe {
+            GetSystemInfo(&mut system_info);
+        }
+        let address = system_info.lpMinimumApplicationAddress;
         let vmqeuery_result =
             unsafe { VirtualQueryEx(process, address, &mut mbi, size_of_val(&mbi)) };
 
@@ -132,7 +140,7 @@ impl VmQueryHelp {
 
         let mut rng_storage: u32 = mbi.Type;
 
-        let mut protected_block = [0u32; 4];
+        // let mut protected_block = [0u32; 4];
         let mut rng_blocks = 0;
         let mut rng_guard_blocks = 0;
         let mut rng_size = 0;
@@ -145,7 +153,8 @@ impl VmQueryHelp {
                 break;
             }
 
-            if rng_blocks < 4 {
+            // TODO: Delete this shit(refactor at least)
+            /* if rng_blocks < 4 {
                 protected_block[rng_blocks] = if mbi.State == MEM_RESERVE {
                     0
                 } else {
@@ -166,6 +175,7 @@ impl VmQueryHelp {
                     mbi.Protect
                 }
             }
+            */
 
             rng_blocks += 1;
             rng_size += mbi.RegionSize;

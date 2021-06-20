@@ -1,4 +1,4 @@
-use std::{env, mem::size_of_val, ptr};
+use std::{env, mem::size_of_val};
 
 use memmap::{
     error::{MemMapResult, WinAPIError},
@@ -21,21 +21,20 @@ use winapi::{
 fn main() -> Result<(), WinAPIError> {
     let process_name = env::args().nth(1).expect("Process name must be present");
 
-    let process_id = get_process_id(process_name)?;
+    let process = find_process_by_name(process_name)?;
 
-    let process: HANDLE = unsafe { OpenProcess(PROCESS_ALL_ACCESS, FALSE, process_id) };
     if process.is_null() {
         return Err(WinAPIError::new());
     }
 
-    let vmquery = VMQuery::new(process, ptr::null())?;
+    let vmquery = VMQuery::new(process)?;
 
     println!("{}", vmquery);
 
     Ok(())
 }
 
-fn get_process_id(process_name: String) -> MemMapResult<u32> {
+fn find_process_by_name(process_name: String) -> MemMapResult<HANDLE> {
     let mut process_info = PROCESSENTRY32::default();
     process_info.dwSize = size_of_val(&process_info) as u32;
 
@@ -44,31 +43,31 @@ fn get_process_id(process_name: String) -> MemMapResult<u32> {
         return Err(WinAPIError::new());
     }
 
-    unsafe {
-        Process32First(processes_snapshot, &mut process_info);
-    }
-
     let array_i8_to_string = |array: &[i8]| -> String {
         String::from_utf8(array.iter().map(|&symbol| symbol as u8).collect())
             .expect("Failed to convert process file name to UTF8 string")
     };
 
-    if array_i8_to_string(&process_info.szExeFile).contains(process_name.as_str()) {
-        unsafe {
-            CloseHandle(processes_snapshot);
-        }
-        return Ok(process_info.th32ProcessID);
+    let mut process_id = None;
+    unsafe {
+        Process32First(processes_snapshot, &mut process_info);
     }
 
-    while unsafe { Process32Next(processes_snapshot, &mut process_info) } != FALSE {
-        if array_i8_to_string(&process_info.szExeFile).contains(process_name.as_str()) {
-            unsafe {
-                CloseHandle(processes_snapshot);
+    if array_i8_to_string(&process_info.szExeFile).contains(process_name.as_str()) {
+        process_id = Some(process_info.th32ProcessID);
+    } else {
+        while unsafe { Process32Next(processes_snapshot, &mut process_info) } != FALSE {
+            if array_i8_to_string(&process_info.szExeFile).contains(process_name.as_str()) {
+                process_id = Some(process_info.th32ProcessID);
+                break;
             }
-            return Ok(process_info.th32ProcessID);
         }
     }
 
     unsafe { CloseHandle(processes_snapshot) };
-    Err(WinAPIError::new())
+
+    match process_id {
+        Some(process_id) => Ok(unsafe { OpenProcess(PROCESS_ALL_ACCESS, FALSE, process_id) }),
+        None => Err(WinAPIError::new()),
+    }
 }
