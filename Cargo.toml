@@ -9,6 +9,5 @@ name = "memmap"
 path = "src/lib.rs"
 
 [dependencies]
-winapi = { version = "0.3.9", features = ["std", "memoryapi", "minwindef", "impl-default", "sysinfoapi", "handleapi", "tlhelp32", "processthreadsapi", "errhandlingapi", "winbase" ] }
+winapi = { version = "0.3.9", features = ["std", "memoryapi", "minwindef", "impl-default", "sysinfoapi", "handleapi", "tlhelp32", "processthreadsapi", "errhandlingapi", "winbase", "psapi"] }
 widestring = { version = "0.4.3", default-features = false, features = ["alloc"] }
-lazy_static = "1.4"
