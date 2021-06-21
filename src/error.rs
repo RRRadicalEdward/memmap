@@ -1,18 +1,18 @@
 use std::{
     error::Error,
     fmt::{self, Formatter},
-    ptr,
+    ptr, slice,
 };
-use widestring::U16String;
+
 use winapi::{
     shared::minwindef::HLOCAL,
     um::{
         errhandlingapi::GetLastError,
         winbase::{
-            FormatMessageW, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
+            FormatMessageA, LocalFree, FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM,
             FORMAT_MESSAGE_IGNORE_INSERTS,
         },
-        winnt::LPWSTR,
+        winnt::LPSTR,
     },
 };
 
@@ -25,24 +25,25 @@ pub struct WinAPIError {
 
 impl WinAPIError {
     pub fn new() -> Self {
-        let mut message_buffer: LPWSTR = ptr::null_mut();
+        let mut message_buffer = ptr::null_mut();
 
         let description = unsafe {
-            let message_size = FormatMessageW(
+            let message_size = FormatMessageA(
                 FORMAT_MESSAGE_ALLOCATE_BUFFER
                     | FORMAT_MESSAGE_FROM_SYSTEM
                     | FORMAT_MESSAGE_IGNORE_INSERTS,
                 ptr::null(),
                 GetLastError(),
                 0,
-                (&mut message_buffer as *mut LPWSTR) as LPWSTR,
+                (&mut message_buffer as *mut LPSTR) as LPSTR,
                 0,
                 ptr::null_mut(),
             );
 
-            let message = U16String::from_ptr(message_buffer, message_size as usize);
+            let slice = slice::from_raw_parts(message_buffer as *const u8, message_size as usize);
+
             LocalFree(message_buffer as HLOCAL);
-            message.to_string_lossy().trim_end().to_string()
+            String::from_utf8_lossy(slice).trim_end().to_owned()
         };
 
         Self { description }
